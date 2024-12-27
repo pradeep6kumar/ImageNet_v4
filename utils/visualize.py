@@ -16,7 +16,6 @@ from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
 # Local Imports
-from model.resnets import ResNet50
 
 
 # -------------------- GradCam --------------------
@@ -70,3 +69,35 @@ def display_gradcam_output(data: list,
         plt.title(r"Correct: " + classes[data[i][1].item()] + '\n' + 'Output: ' + classes[data[i][2].item()])
         plt.xticks([])
         plt.yticks([])
+
+
+def display_loss_and_accuracies(train_losses, train_accuracies, val_losses, val_accuracies):
+    """
+    Display training and validation losses and accuracies over epochs
+    
+    Args:
+        train_losses (list): List of training losses per epoch
+        train_accuracies (list): List of training accuracies per epoch
+        val_losses (list): List of validation losses per epoch
+        val_accuracies (list): List of validation accuracies per epoch
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # Plot losses
+    ax1.plot(train_losses, label='Training Loss')
+    ax1.plot(val_losses, label='Validation Loss')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training and Validation Losses')
+    ax1.legend()
+    
+    # Plot accuracies
+    ax2.plot(train_accuracies, label='Training Accuracy')
+    ax2.plot(val_accuracies, label='Validation Accuracy')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Accuracy')
+    ax2.set_title('Training and Validation Accuracies')
+    ax2.legend()
+    
+    plt.tight_layout()
+    plt.show()
