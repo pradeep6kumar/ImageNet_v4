@@ -46,7 +46,6 @@ def convert_to_beton(
             'label': IntField(),
         },
         num_workers=num_workers,
-        chunk_size=chunk_size,
     )
     
     # Write the dataset
