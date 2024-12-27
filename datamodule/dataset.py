@@ -11,10 +11,17 @@ import torch
 import torchvision
 from torch.utils.data import Dataset, DataLoader
 from ffcv.loader import Loader, OrderOption
-from ffcv.fields.decoders import IntDecoder, SimpleRGBImageDecoder
-from ffcv.transforms import ToTensor, ToTorchImage, Convert, RandomHorizontalFlip, Resize, CenterCrop
+from ffcv.fields.decoders import IntDecoder, SimpleRGBImageDecoder, RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
+from ffcv.transforms import (
+    ToTensor, 
+    ToTorchImage, 
+    Convert, 
+    RandomHorizontalFlip
+)
 from ffcv.transforms.common import Squeeze
-from ffcv.transforms.functional import ToDevice, NormalizeImage
+from ffcv.transforms import ToDevice, NormalizeImage
+from torchvision.transforms import Resize, CenterCrop
+from ffcv.pipeline.operation import Operation
 
 
 class ImageNetDataset:
@@ -45,18 +52,19 @@ class ImageNetDataset:
         
         # Set default transforms if none provided
         if transforms is None:
-            mean = [0.485 * 255, 0.456 * 255, 0.406 * 255]
-            std = [0.229 * 255, 0.224 * 255, 0.225 * 255]
+            mean = np.array([0.485 * 255, 0.456 * 255, 0.406 * 255])
+            std = np.array([0.229 * 255, 0.224 * 255, 0.225 * 255])
             
             image_pipeline = [
                 SimpleRGBImageDecoder(),
                 Resize(256),
                 CenterCrop(224),
-                RandomHorizontalFlip() if mode == 'train' else Operation(),
+                *([RandomHorizontalFlip()] if mode == 'train' else []),
                 ToTensor(),
                 ToDevice(device, non_blocking=True),
-                NormalizeImage(mean, std, np_dtype=torch.float32),
-                ToTorchImage(torch_dtype=torch.float16)
+                NormalizeImage(mean, std, type=np.float32),
+                ToTorchImage(),
+                Convert(torch.float16)
             ]
             
             label_pipeline = [
@@ -75,26 +83,46 @@ class ImageNetDataset:
         if mode == 'train':
             # Use a large shuffle buffer to ensure better randomization across classes
             order = OrderOption.QUASI_RANDOM
-            self.loader = Loader(
-                beton_path,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                order=order,
-                pipelines=transforms,
-                drop_last=True,
-                os_cache=True,
-                shuffle_buffer=shuffle_buffer
-            )
+            # Use RandomResizedCrop for training
+            pipeline = {
+                'image': [
+                    RandomResizedCropRGBImageDecoder((224, 224)),  # Adjust size as needed
+                    ToTensor(),
+                    ToTorchImage(),
+                    Convert(torch.float32)
+                ],
+                'label': [
+                    IntDecoder(),
+                    ToTensor(),
+                    Squeeze()
+                ]
+            }
         else:
             order = OrderOption.SEQUENTIAL
-            self.loader = Loader(
-                beton_path,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                order=order,
-                pipelines=transforms,
-                drop_last=False
-            )
+            # Use CenterCrop for validation/testing
+            pipeline = {
+                'image': [
+                    CenterCropRGBImageDecoder((224, 224), ratio=224/256),  # Adjust sizes as needed
+                    ToTensor(),
+                    ToTorchImage(),
+                    Convert(torch.float32)
+                ],
+                'label': [
+                    IntDecoder(),
+                    ToTensor(),
+                    Squeeze()
+                ]
+            }
+
+        self.loader = Loader(
+            beton_path,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            order=order,
+            pipelines=pipeline,
+            drop_last=True,
+            os_cache=True,
+        )
 
     def __iter__(self):
         """Return iterator over the dataset"""

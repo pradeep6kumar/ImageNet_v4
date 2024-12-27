@@ -4,7 +4,7 @@ DataLoader for ImageNet-1K dataset
 """
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from typing import Optional
-from dataset import ImageNetDataset
+from datamodule.dataset import ImageNetDataset
 
 
 class ImageNetDataLoader(DataLoader):

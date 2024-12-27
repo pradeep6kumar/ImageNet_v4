@@ -26,7 +26,7 @@ class ModelConfig:
     """
     Configuration for the model.
     """
-    num_classes: int = 1000
+    num_classes: int = 100
     dropout_rate: float = 0.1
 
 

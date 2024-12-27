@@ -4,7 +4,11 @@ Augmentations to be applied during training on ImageNet-1K training dataset
 """
 # Third Party Imports
 import albumentations as A
+import torch
 from albumentations.pytorch import ToTensorV2
+from ffcv.transforms import ToTensor, ToTorchImage, Convert, RandomHorizontalFlip
+from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder, IntDecoder
+from ffcv.transforms.common import Squeeze
 
 
 class ImageNetAugmentations:
@@ -46,16 +50,37 @@ class ImageNetAugmentations:
             A.CenterCrop(224, 224),
         ])
 
-    def get_transforms(self, mode: str):
+    def get_transforms(self, mode: str) -> dict:
         """
         Get transforms for ImageNetAugmentations
         :param mode: Mode to get transforms for ('train', 'val', 'test')
         """
         if mode == 'train':
-            return self.train_transforms
-        elif mode == 'val':
-            return self.val_transforms
-        elif mode == 'test':
-            return self.test_transforms
+            return {
+                'image': [
+                    RandomResizedCropRGBImageDecoder((224, 224)),
+                    RandomHorizontalFlip(),
+                    ToTensor(),
+                    ToTorchImage(),
+                    Convert(torch.float32)
+                ],
+                'label': [
+                    IntDecoder(),
+                    ToTensor(),
+                    Squeeze()
+                ]
+            }
         else:
-            raise ValueError(f"Invalid mode: {mode}")
+            return {
+                'image': [
+                    CenterCropRGBImageDecoder((224, 224), ratio=224/256),
+                    ToTensor(),
+                    ToTorchImage(),
+                    Convert(torch.float32)
+                ],
+                'label': [
+                    IntDecoder(),
+                    ToTensor(),
+                    Squeeze()
+                ]
+            }
