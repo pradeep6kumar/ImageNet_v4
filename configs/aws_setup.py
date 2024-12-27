@@ -7,6 +7,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
+from pathlib import Path
 
 # Third Party Imports
 import torch
@@ -29,15 +30,16 @@ class EC2Config:
     gradient_accumulation_steps: int = 4
     
     # Storage paths
-    data_path: str = "/data"
-    checkpoint_path: str = "/checkpoints"
+    _base_path: Path = Path(__file__).parent.parent  # Get project root directory
+    data_path: Path = _base_path / "miniimagenet" / "data"
+    checkpoint_path: Path = _base_path / "miniimagenet" / "assets" / "checkpoints"
     
     def __post_init__(self):
         """
         Create directories if they don't exist
         """
-        os.makedirs(self.data_path, exist_ok=True)
-        os.makedirs(self.checkpoint_path, exist_ok=True)
+        self.data_path.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_path.mkdir(parents=True, exist_ok=True)
     
     def get_optimal_workers(self) -> int:
         """
