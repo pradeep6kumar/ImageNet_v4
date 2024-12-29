@@ -298,56 +298,48 @@ class Trainer:
         total_loss = 0
         correct = 0
         total = 0
-        scaler = GradScaler()
         start_time = time.time()
-
-        # Ensure model is on GPU
-        self.model = self.model.cuda()
-        torch.cuda.synchronize()
         
-        # Set random seed for reproducibility
-        torch.manual_seed(42)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(42)
+        # Fix GradScaler initialization - remove 'cuda' parameter
+        scaler = GradScaler()  # Revert to simple initialization
         
-        for batch_idx, (images, labels) in enumerate(tqdm(self.train_loader, 
-                                                         ncols=100, 
-                                                         desc="Training",
-                                                         miniters=100)):
+        for batch_idx, (images, labels) in enumerate(tqdm(self.train_loader)):
             # Move data to GPU
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
             
-            # Forward pass and loss computation
+            # Zero gradients
             self.optimizer.zero_grad(set_to_none=True)
             
+            # Forward pass
             with torch.amp.autocast(device_type='cuda'):
                 outputs = self.model(images)
                 loss = self.criterion(outputs, labels)
 
-            # Backward pass
+            # Backward pass and optimization
             scaler.scale(loss).backward()
             scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_value)
-            scaler.step(self.optimizer)
+            
+            # Important: Move scheduler.step() after optimizer steps
+            optimizer_skipped = not scaler.step(self.optimizer)
             scaler.update()
+            
+            if not optimizer_skipped:
+                self.scheduler.step()
 
-            self.scheduler.step()
-
-            # Calculate batch accuracy
+            # Calculate metrics
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
-            batch_acc = 100. * correct / total  # Calculate running accuracy
+            total_loss += loss.item()
 
-            # Update total loss
-            total_loss += loss.item()  # Add this back
-
+            # Add back the logging
             if batch_idx % 1000 == 0:
                 current_lr = self.scheduler.get_last_lr()[0]
                 current_speed = batch_idx * self.config['batch_size'] / (time.time() - start_time + 1e-8)
+                batch_acc = 100. * correct / total if total > 0 else 0.0
                 
-                # Add explicit accuracy logging
                 logger.info(
                     f"\nBatch {batch_idx}/{len(self.train_loader)}:"
                     f"\n  - Loss: {loss.item():.3f}"
@@ -356,10 +348,6 @@ class Trainer:
                     f"\n  - LR: {current_lr:.6f}"
                 )
                 self.log_system_stats()
-
-            # Optional: Clear cache periodically (keep this at 1000 as well)
-            if batch_idx % 1000 == 0:
-                torch.cuda.empty_cache()
 
         return total_loss / len(self.train_loader), 100. * correct / total
     
@@ -568,13 +556,25 @@ class Trainer:
         """Find optimal learning rate using LR Finder"""
         logger.info("Starting learning rate finder...")
         
+        # Clear cache before starting
+        torch.cuda.empty_cache()
+        
+        # Use smaller batch size for LR finder
+        temp_loader = DataLoader(
+            self.train_dataset,
+            batch_size=64,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+        
         # Create a copy of the model for LR finding
         model_copy = ImageNetModel(num_classes=1000, pretrained=True).to(self.device)
         model_copy.load_state_dict(self.model.state_dict())
         
         optimizer = optim.Adam(
             model_copy.parameters(),
-            lr=1e-7,  # Start with a very low learning rate
+            lr=1e-7,
             weight_decay=self.config['weight_decay']
         )
         
@@ -582,37 +582,21 @@ class Trainer:
         
         try:
             lr_finder.range_test(
-                self.train_loader,
-                end_lr=10,  # End with a high learning rate
+                temp_loader,
+                end_lr=10,
                 num_iter=num_iter,
                 step_mode="exp",
                 diverge_th=5,
             )
             
-            # Plot the learning rate finder results
-            fig, ax = plt.subplots(figsize=(10, 6))
-            lr_finder.plot()
-            plt.title('Learning Rate Finder Results')
-            plt.xlabel('Learning Rate')
-            plt.ylabel('Loss')
-            plt.grid(True)
-            
-            # Save the plot
-            plot_path = os.path.join(self.plots_dir, 'lr_finder.png')
-            plt.savefig(plot_path)
-            plt.close()
-            
-            # Get suggestion for learning rate
-            suggested_lr = lr_finder.suggestion()
+            # Get the learning rate with steepest gradient
+            suggested_lr = lr_finder.history['lr'][lr_finder.history['loss'].index(min(lr_finder.history['loss']))]
             logger.info(f"Suggested learning rate: {suggested_lr:.6f}")
             
-            # Save learning rate history
-            history_path = os.path.join(self.plots_dir, 'lr_finder_history.txt')
-            with open(history_path, 'w') as f:
-                f.write(f"Suggested LR: {suggested_lr}\n")
-                f.write("History:\n")
-                for lr, loss in zip(lr_finder.history['lr'], lr_finder.history['loss']):
-                    f.write(f"LR: {lr:.8f}, Loss: {loss:.8f}\n")
+            # Plot results
+            lr_finder.plot()
+            plt.savefig(os.path.join(self.plots_dir, 'lr_finder.png'))
+            plt.close()
             
             return suggested_lr
             
@@ -620,7 +604,6 @@ class Trainer:
             logger.error(f"Error during LR finding: {e}")
             raise
         finally:
-            # Clean up
             del model_copy
             torch.cuda.empty_cache()
 
