@@ -133,6 +133,8 @@ class Trainer:
         # 2. Initialize model, criterion, and optimizer
         self.model = ImageNetModel(num_classes=1000, pretrained=True).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
+
+        # Clean SGD initialization with default dampening
         self.optimizer = optim.Adam(
             self.model.parameters(),
             lr=config['learning_rate'],
@@ -208,13 +210,22 @@ class Trainer:
             torch.cuda.synchronize()
             del warmup
 
-        # Initialize SWA after 75% of training
-        self.swa_start = int(0.75 * config['epochs'])
+        # Initialize SWA
+        self.swa_start = 32
         self.swa_model = AveragedModel(self.model)
         self.swa_scheduler = SWALR(
             self.optimizer,
-            swa_lr=config['learning_rate'] * 0.1
+            swa_lr=config['learning_rate'] * 0.1,
+            anneal_epochs=5
         )
+        
+        # Check if we should start with SWA active
+        if self.start_epoch >= self.swa_start:
+            logger.info(f"Resuming with SWA active (epoch {self.start_epoch} >= {self.swa_start})")
+            self.swa_activated = True
+            self.scheduler = self.swa_scheduler
+            self.optimizer.param_groups[0]['lr'] = config['learning_rate'] * 0.1
+            logger.info(f"Set SWA learning rate to {self.optimizer.param_groups[0]['lr']:.6f}")
 
     def _run_checkpoint_worker(self):
         """Run the checkpoint worker in its own thread with its own event loop"""
@@ -300,8 +311,8 @@ class Trainer:
         total = 0
         start_time = time.time()
         
-        # Fix GradScaler initialization - remove 'cuda' parameter
-        scaler = GradScaler()  # Revert to simple initialization
+        # Fix GradScaler initialization
+        scaler = GradScaler()  # Remove device parameter
         
         for batch_idx, (images, labels) in enumerate(tqdm(self.train_loader)):
             # Move data to GPU
@@ -326,7 +337,13 @@ class Trainer:
             scaler.update()
             
             if not optimizer_skipped:
-                self.scheduler.step()
+                if hasattr(self, 'current_epoch') and self.current_epoch >= self.swa_start:
+                    self.swa_scheduler.step()
+                    # Add logging to verify LR change
+                    if batch_idx % 1000 == 0:
+                        logger.info(f"SWA Learning rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+                else:
+                    self.scheduler.step()
 
             # Calculate metrics
             _, predicted = outputs.max(1)
@@ -336,7 +353,7 @@ class Trainer:
 
             # Add back the logging
             if batch_idx % 1000 == 0:
-                current_lr = self.scheduler.get_last_lr()[0]
+                current_lr = self.optimizer.param_groups[0]['lr']
                 current_speed = batch_idx * self.config['batch_size'] / (time.time() - start_time + 1e-8)
                 batch_acc = 100. * correct / total if total > 0 else 0.0
                 
@@ -469,6 +486,19 @@ class Trainer:
         
         try:
             for epoch in range(self.start_epoch, self.config['epochs']):
+                self.current_epoch = epoch
+                logger.info(f"Current epoch {epoch}, swa_start {self.swa_start}, swa_activated: {hasattr(self, 'swa_activated')}")
+                
+                # Check if we should activate SWA now
+                if epoch >= self.swa_start and not hasattr(self, 'swa_activated'):
+                    logger.info(f"Epoch {epoch}: Activating SWA (swa_start={self.swa_start})")
+                    self.swa_model.update_parameters(self.model)
+                    self.scheduler = self.swa_scheduler
+                    old_lr = self.optimizer.param_groups[0]['lr']
+                    self.optimizer.param_groups[0]['lr'] = config['learning_rate'] * 0.1
+                    logger.info(f"Changed LR from {old_lr:.6f} to {self.optimizer.param_groups[0]['lr']:.6f}")
+                    self.swa_activated = True  # Mark as activated
+                
                 epoch_start_time = time.time()
                 logger.info(f"Epoch: {epoch + 1}/{self.config['epochs']}")
                 
