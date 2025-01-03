@@ -74,8 +74,9 @@ def train(model, device, train_loader, optimizer, criterion, scheduler=None, sca
                 optimizer.zero_grad()
 
         # Use learning rate scheduler if defined
-        if scheduler and (batch_idx + 1) % gradient_accumulation_steps == 0:
-            scheduler.step()
+        scheduler.step()
+        # if scheduler and (batch_idx + 1) % gradient_accumulation_steps == 0:
+        #     scheduler.step()
 
         # Note: We multiply loss by gradient_accumulation_steps to get the actual loss
         train_loss += loss.item() * gradient_accumulation_steps

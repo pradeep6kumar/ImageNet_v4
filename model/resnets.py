@@ -20,20 +20,17 @@ class ResNet(nn.Module):
         num_classes: int = 1000,
         blocks: list[int] = [2, 2, 2, 2],
         block_type: str = 'regular',
-        dropout_rate: float = 0.1
     ) -> None:
         """
         Initialize the ResNet model
         :param num_classes: Number of classes to classify
         :param blocks: List of number of blocks in each layer
         :param block_type: Type of residual block ('regular' or 'bottleneck')
-        :param dropout_rate: Dropout rate after convolutions
         """
         super().__init__()
 
         self.blocks = blocks
         self.in_channels = 64
-        self.dropout_rate = dropout_rate
         self.block_type = block_type
         self.expansion = 4 if block_type == 'bottleneck' else 1
 
@@ -41,7 +38,6 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.dropout = nn.Dropout2d(p=dropout_rate)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
         # ResNet blocks
@@ -52,15 +48,20 @@ class ResNet(nn.Module):
 
         # Final layers
         final_channels = 512 * self.expansion
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(final_channels, num_classes)
+
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def _make_layer(self, out_channels: int, blocks: int, is_initial_block: bool) -> nn.Sequential:
         """
         Create a layer of ResNet blocks
-        :param out_channels: Number of output channels for the layer
-        :param blocks: Number of blocks in the layer
-        :param is_initial_block: Whether the first block is an initial block
         """
         layers = []
         layers.append(
@@ -86,9 +87,6 @@ class ResNet(nn.Module):
     def resnet_block(self, is_initial_block: bool, in_channels: int, out_channels: int) -> nn.Module:
         """
         Create either regular or bottleneck block based on block_type
-        :param is_initial_block: Whether the first block is an initial block
-        :param in_channels: Number of input channels
-        :param out_channels: Number of output channels
         """
         if self.block_type == 'bottleneck':
             return self._bottleneck_block(is_initial_block, in_channels, out_channels)
@@ -97,9 +95,6 @@ class ResNet(nn.Module):
     def _regular_block(self, is_initial_block: bool, in_channels: int, out_channels: int) -> nn.Module:
         """
         Regular ResNet block with two 3x3 convolutions
-        :param is_initial_block: Whether the first block is an initial block
-        :param in_channels: Number of input channels
-        :param out_channels: Number of output channels
         """
         initial_conv_stride = 2 if is_initial_block else 1
 
@@ -108,10 +103,8 @@ class ResNet(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=initial_conv_stride, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout2d(p=self.dropout_rate),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.Dropout2d(p=self.dropout_rate)
+            nn.BatchNorm2d(out_channels)
         )
 
         # Shortcut connection
@@ -119,52 +112,47 @@ class ResNet(nn.Module):
         if is_initial_block or in_channels != out_channels:
             shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=initial_conv_stride, bias=False),
-                nn.BatchNorm2d(out_channels),
-                nn.Dropout2d(p=self.dropout_rate)
+                nn.BatchNorm2d(out_channels)
             )
 
-        return ResNetBlock(layers, shortcut)
+        return RegularBlock(layers, shortcut)
 
     def _bottleneck_block(self, is_initial_block: bool, in_channels: int, out_channels: int) -> nn.Module:
         """
         Bottleneck block with 1x1, 3x3, 1x1 convolutions
-        :param is_initial_block: Whether the first block is an initial block
-        :param in_channels: Number of input channels
-        :param out_channels: Number of output channels
         """
         initial_conv_stride = 2 if is_initial_block else 1
         expanded_channels = out_channels * self.expansion
+        bottleneck_channels = out_channels
 
         # Main branch
         layers = nn.Sequential(
             # 1x1 conv
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(in_channels, bottleneck_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(bottleneck_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout2d(p=self.dropout_rate),
 
             # 3x3 conv
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=initial_conv_stride, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(bottleneck_channels, bottleneck_channels, kernel_size=3, 
+                     stride=initial_conv_stride, padding=1, bias=False),
+            nn.BatchNorm2d(bottleneck_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout2d(p=self.dropout_rate),
 
-            # 1x1 conv for expanding dimensions
-            nn.Conv2d(out_channels, expanded_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(expanded_channels),
-            nn.Dropout2d(p=self.dropout_rate)
+            # 1x1 conv
+            nn.Conv2d(bottleneck_channels, expanded_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(expanded_channels)
         )
 
         # Shortcut connection
-        downsample = nn.Sequential()
+        shortcut = nn.Sequential()
         if is_initial_block or in_channels != expanded_channels:
-            downsample = nn.Sequential(
-                nn.Conv2d(in_channels, expanded_channels, kernel_size=1, stride=initial_conv_stride, bias=False),
-                nn.BatchNorm2d(expanded_channels),
-                nn.Dropout2d(p=self.dropout_rate)
+            shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, expanded_channels, kernel_size=1, 
+                         stride=initial_conv_stride, bias=False),
+                nn.BatchNorm2d(expanded_channels)
             )
 
-        return BottleneckBlock(layers, downsample)
+        return BasicBlock(layers, shortcut)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -172,8 +160,7 @@ class ResNet(nn.Module):
         :param x: Input tensor
         """
         # Initial layers
-        x = self.relu(self.bn_init(self.conv_init(x)))
-        x = self.dropout(x)
+        x = self.relu(self.bn1(self.conv1(x)))
         x = self.maxpool(x)
 
         # ResNet blocks
@@ -183,55 +170,44 @@ class ResNet(nn.Module):
         x = self.layer4(x)
 
         # Final layers
-        x = self.avg_pool(x)
+        x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
 
         return x
 
 
-class BottleneckBlock(nn.Module):
+class BasicBlock(nn.Module):
     """
-    Basic ResNet block with skip connection
+    Basic block for both regular and bottleneck architectures
     """
     def __init__(self, layers: nn.Sequential, downsample: nn.Sequential):
-        """
-        Initialize the ResNet block
-        :param layers: Main layers of the block
-        :param downsample: Shortcut connection of the block
-        """
         super().__init__()
-        self.conv1 = layers[0]
-        self.bn1 = layers[1]
-        self.conv2 = layers[3]
-        self.bn2 = layers[4]
-        self.conv3 = layers[6]
-        self.bn3 = layers[7]
-        self.relu = nn.ReLU(inplace=True)
+        self.layers = layers
         self.downsample = downsample
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of the ResNet block
-        :param x: Input tensor
-        """
-        identity = x
-        
-        # Match PyTorch's forward pass structure
-        out = self.conv1(x)
-        out = self.bn1(out)
+        identity = self.downsample(x)
+        out = self.layers(x)
+        out += identity
         out = self.relu(out)
+        return out
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
 
-        out = self.conv3(out)
-        out = self.bn3(out)
+class RegularBlock(nn.Module):
+    """
+    Regular ResNet block with skip connection
+    """
+    def __init__(self, layers: nn.Sequential, downsample: nn.Sequential):
+        super().__init__()
+        self.layers = layers
+        self.downsample = downsample
+        self.relu = nn.ReLU(inplace=True)
 
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.downsample(x)
+        out = self.layers(x)
         out += identity
         out = self.relu(out)
         return out
@@ -242,7 +218,7 @@ class ResNet50(ResNet):
     """
     ResNet50 model
     """
-    def __init__(self, num_classes: int = 1000, dropout_rate: float = 0.1) -> None:
+    def __init__(self, num_classes: int = 1000) -> None:
         """
         Initialize the ResNet50 model
         :param num_classes: Number of classes to classify
@@ -250,8 +226,7 @@ class ResNet50(ResNet):
         super().__init__(
             num_classes=num_classes,
             blocks=[3, 4, 6, 3],
-            block_type='bottleneck',
-            dropout_rate=dropout_rate
+            block_type='bottleneck'
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -259,14 +234,14 @@ class ResNet50(ResNet):
         Forward pass of the ResNet50 model
         :param x: Input tensor
         """
-        super().forward(x)
+        return super().forward(x)
 
 
 class ResNet18(ResNet):
     """
     ResNet18 model
     """
-    def __init__(self, num_classes: int = 1000, dropout_rate: float = 0.1) -> None:
+    def __init__(self, num_classes: int = 1000) -> None:
         """
         Initialize the ResNet18 model
         :param num_classes: Number of classes to classify
@@ -274,8 +249,7 @@ class ResNet18(ResNet):
         super().__init__(
             num_classes=num_classes,
             blocks=[2, 2, 2, 2],
-            block_type='regular',
-            dropout_rate=dropout_rate
+            block_type='regular'
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -283,14 +257,14 @@ class ResNet18(ResNet):
         Forward pass of the ResNet18 model
         :param x: Input tensor
         """
-        super().forward(x)
+        return super().forward(x)
 
 
 class ResNet34(ResNet):
     """
     ResNet34 model
     """
-    def __init__(self, num_classes: int = 1000, dropout_rate: float = 0.1) -> None:
+    def __init__(self, num_classes: int = 1000) -> None:
         """
         Initialize the ResNet34 model
         :param num_classes: Number of classes to classify
@@ -298,8 +272,7 @@ class ResNet34(ResNet):
         super().__init__(
             num_classes=num_classes,
             blocks=[3, 4, 6, 3],
-            block_type='regular',
-            dropout_rate=dropout_rate
+            block_type='regular'
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -307,14 +280,14 @@ class ResNet34(ResNet):
         Forward pass of the ResNet34 model
         :param x: Input tensor
         """
-        super().forward(x)
+        return super().forward(x)
 
 
 class ResNet101(ResNet):
     """
     ResNet101 model
     """
-    def __init__(self, num_classes: int = 1000, dropout_rate: float = 0.1) -> None:
+    def __init__(self, num_classes: int = 1000) -> None:
         """
         Initialize the ResNet101 model
         :param num_classes: Number of classes to classify
@@ -322,8 +295,7 @@ class ResNet101(ResNet):
         super().__init__(
             num_classes=num_classes,
             blocks=[3, 4, 23, 3],
-            block_type='bottleneck',
-            dropout_rate=dropout_rate
+            block_type='bottleneck'
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -331,14 +303,14 @@ class ResNet101(ResNet):
         Forward pass of the ResNet101 model
         :param x: Input tensor
         """
-        super().forward(x)
+        return super().forward(x)
 
 
 class ResNet152(ResNet):
     """
     ResNet152 model
     """
-    def __init__(self, num_classes: int = 1000, dropout_rate: float = 0.1) -> None:
+    def __init__(self, num_classes: int = 1000) -> None:
         """
         Initialize the ResNet152 model
         :param num_classes: Number of classes to classify
@@ -346,8 +318,7 @@ class ResNet152(ResNet):
         super().__init__(
             num_classes=num_classes,
             blocks=[3, 8, 36, 3],
-            block_type='bottleneck',
-            dropout_rate=dropout_rate
+            block_type='bottleneck'
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -355,4 +326,5 @@ class ResNet152(ResNet):
         Forward pass of the ResNet152 model
         :param x: Input tensor
         """
-        super().forward(x)
+        return super().forward(x)
+
