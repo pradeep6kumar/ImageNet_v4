@@ -1,0 +1,6 @@
+__pycache__/
+data/
+checkpoints/
+assets/models/
+assets/beton/
+.ipynb_checkpoints/
