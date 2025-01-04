@@ -1,0 +1,3 @@
+[submodule "ImageNetApp"]
+	path = ImageNetApp
+	url = https://huggingface.co/spaces/Shilpaj/ImageNet
