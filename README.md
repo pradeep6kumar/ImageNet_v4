@@ -303,6 +303,19 @@ The same setup is used for larger dataset to train the model
 ## Gradio App
 
 - The trained model is deployed on Gradio
+
 - Application Link - https://huggingface.co/spaces/Shilpaj/ImageNet
+
+- To pull the application code
+
+  ```bash
+  ## Initialize Submodules
+  $ git submodule update --init --recursive
+  
+  ## Pull app code
+  $ git clone --recurse-submodules https://huggingface.co/spaces/Shilpaj/ImageNet
+  ```
+
+  
 
 ![Gradio App for trained model](./assets/docs/app.png)
